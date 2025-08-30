@@ -8,8 +8,15 @@ class Camera:
         self.aspect = aspect
 
     def primary_ray(self, u, v):
-        fov_rad = self.fov * 3.14159 / 180
-        x = u * self.aspect * (2 * (self.eye.z - self.center.z) * (3.14159 / 180) * self.fov / 2)
-        y = v * (2 * (self.eye.z - self.center.z) * (3.14159 / 180) * self.fov / 2)
+        # Convertir FOV a radianes y calcular scale correctamente
+        import math
+        fov_rad = math.radians(self.fov)
+        scale = math.tan(fov_rad * 0.5)
+        
+        # Coordenadas en screen space (-1 a 1)
+        x = (2 * u - 1) * self.aspect * scale
+        y = (2 * v - 1) * scale
+        
+        # Dirección del rayo (apuntando hacia -Z)
         direction = Vec3(x, y, -1).normalize()
         return self.eye, direction
