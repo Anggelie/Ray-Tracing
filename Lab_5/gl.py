@@ -1,22 +1,17 @@
 from vec import Vec3
-import numpy as np
 from camera import Camera
 from shading import phong_shade
+import numpy as np
 
 class Renderer:
     def __init__(self, screen):
         self.screen = screen
         _, _, self.width, self.height = screen.get_rect()
-        # Configuración de cámara más estándar
-        self.camera = Camera(
-            center=Vec3(0, 0, 0),    # Mirando hacia el origen
-            eye=Vec3(0, 0, 8),       # Más lejos para mejor perspectiva
-            fov_deg=45,              # FOV más conservador
-            aspect=self.width/self.height
-        )
+        # Cámara más cerca y FOV más grande
+        self.camera = Camera(center=Vec3(0, 0, -5), eye=Vec3(0, 0, -2), fov_deg=90, aspect=self.width/self.height)
         self.scene = []
         self.lights = []
-        self.ambient = 0.1  # Luz ambiente más sutil
+        self.ambient = 0.4  # Más luz ambiente
 
     def glRender(self):
         for y in range(self.height):
