@@ -3,6 +3,7 @@ from Textures.MathLib import normalize
 from Textures.intercept import Intercept
 from Textures.material import Material
 
+EPS = 1e-6
 
 #   Clase base
 class Shape:
@@ -15,7 +16,7 @@ class Shape:
         raise NotImplementedError
 
 
-# Esfera
+#   Esfera
 class Sphere(Shape):
     def __init__(self, position, radius, material):
         super().__init__(position, material)
@@ -33,8 +34,8 @@ class Sphere(Shape):
         t0 = tca - thc
         t1 = tca + thc
 
-        t = t0 if t0 > 1e-6 else t1
-        if t < 1e-6:
+        t = t0 if t0 > EPS else t1
+        if t < EPS:
             return None
 
         hit = orig + dir * t
@@ -42,7 +43,7 @@ class Sphere(Shape):
         return Intercept(point=hit, normal=normal, distance=t, obj=self)
 
 
-# Plano infinito
+#   Plano infinito
 class Plane(Shape):
     def __init__(self, position, normal, material):
         super().__init__(position, material)
@@ -54,13 +55,13 @@ class Plane(Shape):
         if abs(denom) < 1e-6:
             return None  # rayo paralelo
         t = np.dot(self.position - orig, self.normal) / denom
-        if t < 1e-6:
+        if t < EPS:
             return None
         hit = orig + dir * t
         return Intercept(point=hit, normal=self.normal, distance=t, obj=self)
 
 
-#   Disco 
+#   Disco
 class Disk(Plane):
     def __init__(self, position, normal, radius, material):
         super().__init__(position, normal, material)
@@ -80,7 +81,7 @@ class Disk(Plane):
 #   Triángulo
 class Triangle(Shape):
     def __init__(self, A, B, C, material):
-        super().__init__(A, material) 
+        super().__init__(A, material)  # usamos A como punto del plano
         self.A = np.array(A, dtype=np.float32)
         self.B = np.array(B, dtype=np.float32)
         self.C = np.array(C, dtype=np.float32)
@@ -93,7 +94,7 @@ class Triangle(Shape):
         if abs(denom) < 1e-6:
             return None
         t = np.dot(self.A - orig, self.normal) / denom
-        if t < 1e-6:
+        if t < EPS:
             return None
 
         P = orig + dir * t
@@ -139,8 +140,8 @@ class Cube(Shape):
         if t_near > t_far or t_far < 0:
             return None
 
-        t = t_near if t_near > 1e-6 else t_far
-        if t < 1e-6:
+        t = t_near if t_near > EPS else t_far
+        if t < EPS:
             return None
 
         hit = orig + dir * t
@@ -158,6 +159,7 @@ class Cube(Shape):
         return Intercept(point=hit, normal=normal, distance=t, obj=self)
 
 
+#   Cilindro (eje Y) con tapas
 class Cylinder(Shape):
     def __init__(self, position, radius, height, material):
         super().__init__(position, material)
@@ -171,6 +173,7 @@ class Cylinder(Shape):
         dx, dy, dz = dir
 
         ox -= cx; oy -= cy; oz -= cz
+
         a = dx*dx + dz*dz
         b = 2.0 * (ox*dx + oz*dz)
         c = ox*ox + oz*oz - self.radius*self.radius
@@ -184,44 +187,36 @@ class Cylinder(Shape):
                 rdisc = np.sqrt(disc)
                 t0 = (-b - rdisc) / (2*a)
                 t1 = (-b + rdisc) / (2*a)
+                if t0 > t1: t0, t1 = t1, t0
 
-                # Ordena t0 <= t1
-                if t0 > t1:
-                    t0, t1 = t1, t0
-
-                # Primer t válido que cae dentro de la altura
                 for t_candidate in (t0, t1):
-                    if t_candidate > 1e-6:
+                    if t_candidate > EPS:
                         y_hit = oy + dy * t_candidate
                         y_min = -self.height * 0.5
                         y_max =  self.height * 0.5
                         if y_min - 1e-6 <= y_hit <= y_max + 1e-6:
                             t_side = t_candidate
-                            # Normal lateral en local (x,z)
                             hit_local = np.array([ox + dx*t_side, y_hit, oz + dz*t_side], dtype=np.float32)
                             n_local = np.array([hit_local[0], 0.0, hit_local[2]], dtype=np.float32)
                             n_side = normalize(n_local)
                             break
 
-        # Intersección con tapas (planos y = ±height/2)
         t_cap = None
         n_cap = None
         y_min = -self.height * 0.5
         y_max =  self.height * 0.5
 
         if abs(dy) > 1e-12:
-            # Top cap (y = y_max)
             t_top = (y_max - oy) / dy
-            if t_top > 1e-6:
+            if t_top > EPS:
                 xh = ox + dx * t_top
                 zh = oz + dz * t_top
                 if (xh*xh + zh*zh) <= self.radius*self.radius + 1e-8:
                     t_cap = t_top
                     n_cap = np.array([0.0, 1.0, 0.0], dtype=np.float32)
 
-            # Bottom cap (y = y_min)
             t_bottom = (y_min - oy) / dy
-            if t_bottom > 1e-6:
+            if t_bottom > EPS:
                 xh = ox + dx * t_bottom
                 zh = oz + dz * t_bottom
                 if (xh*xh + zh*zh) <= self.radius*self.radius + 1e-8:
@@ -229,7 +224,6 @@ class Cylinder(Shape):
                         t_cap = t_bottom
                         n_cap = np.array([0.0, -1.0, 0.0], dtype=np.float32)
 
-        # Elegir el impacto más cercano válido entre lateral y tapas
         t = None
         n_local = None
         if t_side is not None and t_cap is not None:
@@ -246,12 +240,12 @@ class Cylinder(Shape):
 
         hit_local = np.array([ox + dx*t, oy + dy*t, oz + dz*t], dtype=np.float32)
         hit_world = hit_local + np.array([cx, cy, cz], dtype=np.float32)
-
         normal_world = normalize(n_local)
 
         return Intercept(point=hit_world, normal=normal_world, distance=t, obj=self)
 
 
+#   Elipsoide
 class Ellipsoid(Shape):
     def __init__(self, position, radii, material):
         """
@@ -277,8 +271,8 @@ class Ellipsoid(Shape):
         t0 = (-b - rdisc) / (2*a)
         t1 = (-b + rdisc) / (2*a)
 
-        t = t0 if t0 > 1e-6 else t1
-        if t < 1e-6:
+        t = t0 if t0 > EPS else t1
+        if t < EPS:
             return None
 
         p_unit = o + d * t
@@ -291,3 +285,62 @@ class Ellipsoid(Shape):
         normal = normalize(np.array([nx, ny, nz], dtype=np.float32))
 
         return Intercept(point=hit, normal=normal, distance=t, obj=self)
+
+
+#   Toroide (dona) — cuártico
+class Torus(Shape):
+    def __init__(self, position, R, r, material):
+        super().__init__(position, material)
+        self.R = float(R)  # radio mayor
+        self.r = float(r)  # radio menor
+        self.type = "Torus"
+
+    def ray_intersect(self, orig, dir):
+        # Rayo en coords locales del toro
+        O = orig - self.position
+        D = dir
+
+        ox, oy, oz = O
+        dx, dy, dz = D
+        R, r = self.R, self.r
+
+        # Coeficientes del cuártico en t
+        sum_d_sq = dx*dx + dy*dy + dz*dz
+        e = ox*ox + oy*oy + oz*oz - R*R - r*r
+        f = ox*dx + oy*dy + oz*dz
+        four_R2 = 4.0 * R * R
+
+        coeffs = [
+            sum_d_sq*sum_d_sq,
+            4.0*sum_d_sq*f,
+            2.0*sum_d_sq*e + 4.0*f*f + four_R2*dz*dz,
+            4.0*f*e + 2.0*four_R2*oz*dz,
+            e*e - four_R2*(r*r - oz*oz)
+        ]
+
+        roots = np.roots(coeffs)
+        roots = [t.real for t in roots if abs(t.imag) < 1e-6 and t > EPS]
+        if not roots:
+            return None
+
+        t = min(roots)
+
+        hit_local = O + t * D
+
+        # Gradiente de F(x,y,z) del toroide para la normal
+        x, y, z = hit_local
+        g = x*x + y*y + z*z - r*r - R*R
+        nx = 4.0 * x * g
+        ny = 4.0 * y * g
+        nz = 4.0 * z * (g + 2.0 * R*R)
+        normal_local = normalize(np.array([nx, ny, nz], dtype=np.float32))
+
+        hit_world = hit_local + self.position
+        return Intercept(
+            point=hit_world,
+            normal=normal_local,
+            distance=t,
+            obj=self,
+            texCoords=None,
+            rayDirection=dir
+        )

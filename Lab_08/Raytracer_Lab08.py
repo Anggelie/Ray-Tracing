@@ -1,139 +1,172 @@
 import os
-import sys
 import pygame
-from pygame.locals import QUIT, KEYDOWN, K_ESCAPE, K_r
-
-# Asegura imports relativos
-CURR_DIR = os.path.dirname(os.path.abspath(__file__))
-if CURR_DIR not in sys.path:
-    sys.path.append(CURR_DIR)
-
-from config import (
-    WIDTH, HEIGHT, WINDOW_TITLE, OUTPUT_PATH,
-    CAMERA_POSITION, CAMERA_TARGET, CAMERA_UP, FOV_DEG,
-    BG_COLOR
-)
+from pygame.locals import *
+import numpy as np
 
 from BMP.BMP_Writer import save as save_bmp
 from Textures.gl import Raytracer
-from Textures.lights import AmbientLight, DirectionalLight, PointLight
-from Textures.material import Material, MAT_DIFFUSE, MAT_REFLECTIVE, MAT_REFRACTIVE
-from Textures.figures import Plane, Cylinder
 from Textures.MathLib import normalize
-import numpy as np
+from Textures.material import Material, MAT_DIFFUSE, MAT_REFLECTIVE
+from Textures.lights import AmbientLight, DirectionalLight, PointLight
+from Textures.figures import Plane, Cube, Cylinder, Torus
 
+# Resolución 
+FAST_PREVIEW = True
+WIDTH, HEIGHT = (800, 600) if FAST_PREVIEW else (512, 512)
+WINDOW_TITLE  = "Lab 08"
+OUTPUT_PATH   = os.path.join("renders", "Lab08_room_plus_centered.bmp")
 
-def build_scene(rt: Raytracer):
-    """Aquí defines una escena mínima (3 cilindros) para el 50%."""
-    # --- Materiales
-    matte_green   = Material(color=(0.25, 0.65, 0.35), kd=0.9, ks=0.1, shininess=32,  mtype=MAT_DIFFUSE)
-    metal_silver  = Material(color=(0.9, 0.9, 0.95),  kd=0.2, ks=0.7, shininess=120, mtype=MAT_REFLECTIVE, kr=0.7)
-    glass_clear   = Material(color=(1.0, 1.0, 1.0),   kd=0.05, ks=0.1, shininess=64, mtype=MAT_REFRACTIVE, ior=1.5, kt=0.95, kr=0.05)
+#  Cámara 
+CAMERA_POS = np.array([0.0, 1.2, 4.0], dtype=np.float32) 
+FOV_DEG    = 70.0  
 
-    wall_white = Material(color=(0.95, 0.95, 0.95), kd=0.9, ks=0.05, shininess=16, mtype=MAT_DIFFUSE)
-    wall_warm  = Material(color=(0.90, 0.86, 0.80), kd=0.85, ks=0.05, shininess=16, mtype=MAT_DIFFUSE)
-    floor_ref  = Material(color=(0.80, 0.78, 0.75), kd=0.5, ks=0.5, shininess=100, mtype=MAT_REFLECTIVE)
+def hexc(h):
+    h = h.lstrip('#')
+    return tuple(int(h[i:i+2], 16)/255.0 for i in (0, 2, 4))
 
-    # --- Cuarto + 3 cilindros
+SOFT_PINK = hexc('#f2cfc9')
+MINT      = hexc('#b8caa5')
+SKY       = hexc('#b4d8d4')
+CORAL     = hexc('#dd785b')
+OLIVE     = hexc('#c4c66a')
+METAL     = (0.92, 0.92, 0.95)
+
+def make_checker_floor_to_wall(rt,
+                               y_plane=-1.0,
+                               z_back=-8.0, z_front=3.5,
+                               nx=12, nz=18,
+                               tile_x=0.9, tile_z=0.9,
+                               colA=(0.80,0.77,0.70),
+                               colB=(0.64,0.61,0.55),
+                               ks=0.25, shiny=85,
+                               expand_eps=0.003):
+    """
+    Construye casillas como cubos delgados desde la pared del fondo (z_back)
+    hasta debajo de la cámara (z_front), centrado en X.
+    """
+    total_x = nx * tile_x
+    halfx   = total_x * 0.5
+
+    slab_h  = 0.02
+    y0 = y_plane - 1e-4
+    y1 = y0 + slab_h
+
+    bot_z = min(z_back, z_front)
+    top_z = max(z_back, z_front)
+    step_z = (top_z - bot_z) / nz
+
+    for ix in range(nx):
+        for iz in range(nz):
+            x0 = -halfx + ix * tile_x
+            x1 = x0 + tile_x
+            z0 = bot_z + iz * step_z
+            z1 = z0 + step_z
+
+            x0 -= expand_eps; x1 += expand_eps
+            z0 -= expand_eps; z1 += expand_eps
+
+            color = colA if (ix + iz) % 2 == 0 else colB
+            mat = Material(color=color, kd=0.78, ks=ks, shininess=shiny, mtype=MAT_REFLECTIVE)
+
+            rt.scene.append(Cube(min_point=(x0, y0, z0), max_point=(x1, y1, z1), material=mat))
+
+def build_room_and_floor(rt):
+    wall    = Material(color=(0.96, 0.96, 0.97), kd=0.95, ks=0.05, shininess=14, mtype=MAT_DIFFUSE)
+    ceiling = Material(color=(0.98, 0.98, 0.99), kd=0.96, ks=0.04, shininess=12, mtype=MAT_DIFFUSE)
+
     rt.scene = [
-        Plane(position=(0, -1.0,  0), normal=(0, 1, 0),  material=floor_ref),  # piso
-        Plane(position=(0,  3.0,  0), normal=(0,-1, 0),  material=wall_warm),  # techo
-        Plane(position=(0,  0,  -4), normal=(0, 0, 1),  material=wall_white),  # fondo
-        Plane(position=(-3, 0,   0), normal=(1, 0, 0),  material=wall_warm),   # pared izq
-        Plane(position=( 3, 0,   0), normal=(-1,0, 0),  material=wall_warm),   # pared der
-
-        Cylinder(position=(-1.6, -0.2, -1.2), radius=0.45, height=1.6, material=matte_green),
-        Cylinder(position=( 0.0, -0.5, -1.8), radius=0.35, height=2.2, material=metal_silver),
-        Cylinder(position=( 1.4, -0.2, -0.6), radius=0.50, height=1.6, material=glass_clear),
+        Plane(position=(0.0, -1.0,  0.0), normal=(0,  1, 0),  material=wall),     # piso base del plano
+        Plane(position=(0.0,  3.2,  0.0), normal=(0, -1, 0),  material=ceiling),  # techo
+        Plane(position=(0.0,  0.0, -8.0), normal=(0,  0, 1),  material=wall),     # pared fondo
+        Plane(position=(-4.8, 0.0,  0.0), normal=(1,  0, 0),  material=wall),     # pared izq
+        Plane(position=( 4.8, 0.0,  0.0), normal=(-1, 0, 0),  material=wall),     # pared der
     ]
 
-    # --- Luces
+    make_checker_floor_to_wall(
+        rt,
+        y_plane=-1.0,
+        z_back=-8.0, z_front=3.5,
+        nx=14, nz=22,        # un poco más denso para esta proporción
+        tile_x=0.9, tile_z=0.9,
+        colA=(0.80,0.77,0.70), colB=(0.64,0.61,0.55),
+        ks=0.25, shiny=85, expand_eps=0.003
+    )
+
+def add_objects(rt):
+    matMetal = Material(color=METAL, kd=0.10, ks=0.90, shininess=200, mtype=MAT_REFLECTIVE)
+    matMint  = Material(color=MINT,  kd=0.82, ks=0.18, shininess=45,  mtype=MAT_DIFFUSE)
+    matSky   = Material(color=SKY,   kd=0.82, ks=0.18, shininess=45,  mtype=MAT_DIFFUSE)
+    matPink  = Material(color=SOFT_PINK, kd=0.85, ks=0.15, shininess=40, mtype=MAT_DIFFUSE)
+    matCoral = Material(color=CORAL, kd=0.83, ks=0.17, shininess=48,  mtype=MAT_DIFFUSE)
+    matOlive = Material(color=OLIVE, kd=0.83, ks=0.17, shininess=48,  mtype=MAT_DIFFUSE)
+
+    rt.scene += [
+        Torus(position=(-2.5, 0.7, -7.2), R=1.15, r=0.38, material=matMetal),
+        Torus(position=( 0.0, 0.7, -7.2), R=1.15, r=0.38, material=matMint),
+        Torus(position=( 2.5, 0.7, -7.2), R=1.15, r=0.38, material=matPink),
+    ]
+
+    h_cyl = 1.40
+    r_cyl = 0.55
+    tile_top = -0.98
+    cy = tile_top + h_cyl/2 + 0.01
+
+    rt.scene += [
+        Cylinder(position=(-2.5, cy, -4.2), radius=r_cyl, height=h_cyl, material=matCoral),
+        Cylinder(position=( 0.0, cy, -4.2), radius=r_cyl, height=h_cyl, material=matSky),
+        Cylinder(position=( 2.5, cy, -4.2), radius=r_cyl, height=h_cyl, material=matOlive),
+    ]
+
+# Luces
+def setup_lights(rt):
     rt.lights = [
-        AmbientLight(color=(1.0, 1.0, 1.0), intensity=0.12),
-        DirectionalLight(direction=normalize([-0.6, -1.2, -0.5]), color=(1.0, 0.98, 0.95), intensity=0.9),
-        DirectionalLight(direction=normalize([ 0.7, -0.6, -0.2]), color=(0.95, 0.97, 1.0), intensity=0.35),
-        PointLight(position=(0.0, 2.8, -0.5), color=(1.0, 0.99, 0.97), intensity=0.6),
-        PointLight(position=(0.0, 1.6, -3.0), color=(0.98, 0.96, 1.0), intensity=0.35),
+        AmbientLight(intensity=0.22),
+        PointLight(position=(0.0, 3.0, -2.5), intensity=1.35),
+        DirectionalLight(direction=normalize([ 0.4, -1.0, -0.2]), intensity=0.35),
+        DirectionalLight(direction=normalize([-0.4, -1.0, -0.2]), intensity=0.35),
     ]
-
-
-def rt_to_surface(rt):
-    """Convierte el framebuffer (float [0..1]) a una Surface de Pygame."""
-    # array (H, W, 3) float -> uint8
-    img = (np.clip(rt.framebuffer, 0, 1) * 255).astype(np.uint8)
-    # Pygame espera (W, H) y bytes; creamos Surface y volcamos
-    surface = pygame.Surface((rt.width, rt.height))
-    pygame.surfarray.blit_array(surface, img.swapaxes(0, 1))  # swap para (W,H)
-    return surface
-
-
-def do_render(rt):
-    """Renderiza con el Raytracer y retorna Surface."""
-    print("Renderizando…")
-    rt.render()
-    print("Render listo.")
-    return rt_to_surface(rt)
-
-
-def ensure_dir(path):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-
 
 def main():
     pygame.init()
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.SCALED)
     pygame.display.set_caption(WINDOW_TITLE)
     clock = pygame.time.Clock()
 
-    # --- Raytracer
-    rt = Raytracer(
-        WIDTH, HEIGHT,
-        samples_per_pixel=4,
-        enable_ao=True,
-        ao_samples=8,
-        ao_distance=2.0,
-        max_depth=3
-    )
-    rt.backgroundColor = np.array(BG_COLOR, dtype=np.float32)
+    rt = Raytracer(WIDTH, HEIGHT)
+    rt.eye = CAMERA_POS
+    rt.fov = FOV_DEG
+    rt.backgroundColor = np.array([0.94, 0.95, 0.97], dtype=np.float32)
 
-    # Cámara desde config
-    rt.eye    = np.array(CAMERA_POSITION, dtype=np.float32)
-    rt.target = np.array(CAMERA_TARGET,  dtype=np.float32)
-    rt.up     = np.array(CAMERA_UP,      dtype=np.float32)
-    rt.fov    = float(FOV_DEG)
-    rt.update_camera()
+    build_room_and_floor(rt)
+    add_objects(rt)
+    setup_lights(rt)
 
-    # Escena
-    build_scene(rt)
+    print("Renderizando…")
+    try:
+        rt.render()
+    except AttributeError:
+        rt.rtRender()
 
-    # Primer render
-    surface = do_render(rt)
-    screen.blit(surface, (0, 0))
+    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
+    save_bmp(OUTPUT_PATH, WIDTH, HEIGHT, rt.framebuffer)
+    print(f" Guardado en {OUTPUT_PATH}")
+
+    img = (np.clip(rt.framebuffer, 0, 1) * 255).astype(np.uint8)
+    if img.shape[0] == HEIGHT and img.shape[1] == WIDTH:
+        img = np.transpose(img, (1, 0, 2))
+    surf = pygame.surfarray.make_surface(img)
+    screen.blit(surf, (0, 0))
     pygame.display.flip()
 
-    isRunning = True
-    while isRunning:
-        for event in pygame.event.get():
-            if event.type == QUIT:
-                isRunning = False
-            elif event.type == KEYDOWN:
-                if event.key == K_ESCAPE:
-                    isRunning = False
-                elif event.key == K_r:
-                    # Re-render
-                    surface = do_render(rt)
-                    screen.blit(surface, (0, 0))
-                    pygame.display.flip()
-
+    print("ESC para salir")
+    running = True
+    while running:
+        for e in pygame.event.get():
+            if e.type == QUIT or (e.type == KEYDOWN and e.key == K_ESCAPE):
+                running = False
         clock.tick(60)
 
-    # Guardar BMP al salir
-    ensure_dir(OUTPUT_PATH)
-    save_bmp(OUTPUT_PATH, rt.width, rt.height, rt.framebuffer)
-    print(f"Imagen guardada en: {OUTPUT_PATH}")
-
     pygame.quit()
-
 
 if __name__ == "__main__":
     main()
